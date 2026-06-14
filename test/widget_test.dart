@@ -8,8 +8,8 @@ import 'package:clipq/features/clipboard/application/clipboard_sync_service.dart
 
 class FakeClipboardSyncService extends ClipboardSyncService {
   @override
-  Future<SyncStatus> build() async {
-    return SyncStatus.idle;
+  Future<SyncState> build() async {
+    return SyncState.idle();
   }
 }
 

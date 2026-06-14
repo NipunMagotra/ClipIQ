@@ -1,6 +1,7 @@
 import 'dart:async';
 
 import 'package:flutter/foundation.dart';
+import 'package:flutter/widgets.dart';
 import 'package:uuid/uuid.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
@@ -24,13 +25,47 @@ final clipboardServiceProvider = Provider<ClipboardService>((ref) {
 });
 
 final clipboardSyncServiceProvider =
-    AsyncNotifierProvider<ClipboardSyncService, SyncStatus>(
+    AsyncNotifierProvider<ClipboardSyncService, SyncState>(
   () => ClipboardSyncService(),
 );
 
 // ── Sync status ────────────────────────────────────────────────────────────────
 
 enum SyncStatus { idle, syncing, paused, error }
+
+class SyncState {
+  final SyncStatus status;
+  final String? errorMessage;
+  final String? errorDetails;
+
+  const SyncState({
+    required this.status,
+    this.errorMessage,
+    this.errorDetails,
+  });
+
+  factory SyncState.idle() => const SyncState(status: SyncStatus.idle);
+  factory SyncState.syncing() => const SyncState(status: SyncStatus.syncing);
+  factory SyncState.paused() => const SyncState(status: SyncStatus.paused);
+  factory SyncState.error(String message, [String? details]) => SyncState(
+        status: SyncStatus.error,
+        errorMessage: message,
+        errorDetails: details,
+      );
+
+  @override
+  bool operator ==(Object other) =>
+      identical(this, other) ||
+      other is SyncState &&
+          runtimeType == other.runtimeType &&
+          status == other.status &&
+          errorMessage == other.errorMessage &&
+          errorDetails == other.errorDetails;
+
+  @override
+  int get hashCode =>
+      status.hashCode ^ errorMessage.hashCode ^ errorDetails.hashCode;
+}
 
 // ── Service ────────────────────────────────────────────────────────────────────
 
@@ -43,16 +78,19 @@ enum SyncStatus { idle, syncing, paused, error }
 /// 5. Subscribes to Supabase Realtime for remote inserts
 /// 6. Filters out own-device echoes via [device_id]
 /// 7. Writes remote content back to local clipboard
-class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
+class ClipboardSyncService extends AsyncNotifier<SyncState> with WidgetsBindingObserver {
   StreamSubscription<void>? _monitorSub;
   Timer? _debounce;
   ClipboardPayload? _lastUploadedPayload;
+  ClipboardPayload? _currentlyUploadingPayload;
   String? _deviceId;
   String? _userId;
+  RealtimeChannel? _realtimeChannel;
 
   @override
-  Future<SyncStatus> build() async {
+  Future<SyncState> build() async {
     ref.onDispose(_dispose);
+    WidgetsBinding.instance.addObserver(this);
 
     // Boot up the sync pipeline if user is authenticated.
     final user = Supabase.instance.client.auth.currentUser;
@@ -70,19 +108,19 @@ class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
       }
     });
 
-    return SyncStatus.idle;
+    return SyncState.idle();
   }
 
   // ── Public actions ──────────────────────────────────────────────────────────
 
   Future<void> togglePause() async {
-    final current = state.valueOrNull;
+    final current = state.valueOrNull?.status;
     if (current == SyncStatus.paused) {
       final user = Supabase.instance.client.auth.currentUser;
       if (user != null) await _startSync(user);
     } else {
       await _stopSync();
-      state = const AsyncData(SyncStatus.paused);
+      state = AsyncData(SyncState.paused());
     }
   }
 
@@ -96,7 +134,7 @@ class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
 
     // ── 1. Subscribe to remote inserts ──────────────────────────────────────
     final repo = ref.read(clipboardRepositoryProvider);
-    repo.subscribeToInserts(
+    _realtimeChannel = repo.subscribeToInserts(
       userId: user.id,
       onInsert: _onRemoteInsert,
     );
@@ -106,24 +144,97 @@ class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
     _monitorSub = ClipboardMonitorService.instance.clipboardChanges
         .listen(_onLocalClipboardChanged);
 
-    state = const AsyncData(SyncStatus.idle);
+    state = AsyncData(SyncState.idle());
     debugPrint('[SyncService] started for user ${user.id}, device: $_deviceId');
 
     // Initial check when sync starts (app launch / resume sync)
-    _uploadCurrentClipboard();
+    syncClipboard();
   }
 
   Future<void> _stopSync() async {
     _debounce?.cancel();
     await _monitorSub?.cancel();
     _monitorSub = null;
+    if (_realtimeChannel != null) {
+      await Supabase.instance.client.removeChannel(_realtimeChannel!);
+      _realtimeChannel = null;
+    }
     await ClipboardMonitorService.instance.stop();
     debugPrint('[SyncService] stopped');
   }
 
   void _dispose() {
+    WidgetsBinding.instance.removeObserver(this);
     _debounce?.cancel();
     _monitorSub?.cancel();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      debugPrint('[SyncService] App resumed: triggering sync and silent history refresh');
+      syncClipboard();
+      ref.read(clipboardHistoryProvider.notifier).silentRefresh();
+    }
+  }
+
+  Future<void> syncClipboard() async {
+    if (_userId == null || _deviceId == null) return;
+
+    try {
+      final repo = ref.read(clipboardRepositoryProvider);
+      final clipService = ref.read(clipboardServiceProvider);
+
+      // 1. Read local clipboard
+      final localPayload = await clipService.readClipboard();
+
+      // 2. Fetch the latest item from database
+      final history = await repo.fetchHistory(limit: 1);
+      final dbItem = history.isNotEmpty ? history.first : null;
+
+      // Check if local clipboard has new unsynced content
+      final localIsNew = localPayload != null &&
+          !clipService.isSameContent(localPayload, _lastUploadedPayload) &&
+          !clipService.isSameContent(localPayload, _currentlyUploadingPayload);
+
+      if (localIsNew) {
+        // Local has new copied content, upload it!
+        await _uploadCurrentClipboard();
+        return;
+      }
+
+      // If local clipboard is not new (either null or same as last synced),
+      // we check if database has a newer/different item from another device.
+      if (dbItem != null && dbItem.deviceId != _deviceId) {
+        final isSameAsLocal = localPayload != null &&
+            localPayload.contentType == dbItem.contentType &&
+            (localPayload.contentType == 'image'
+                ? dbItem.storagePath != null
+                : localPayload.storageContent == dbItem.textContent);
+
+        if (!isSameAsLocal) {
+          // Database item is different and from another device. Sync it to local!
+          final remotePayload = await _itemToPayload(dbItem);
+          if (remotePayload != null) {
+            _currentlyUploadingPayload = remotePayload; // prevent triggers
+            _lastUploadedPayload = remotePayload;
+            try {
+              await clipService.writeClipboard(remotePayload);
+              debugPrint('[SyncService] Synced remote item to local clipboard: ${dbItem.id}');
+              
+              // Prepend to notifier so UI matches instantly
+              ref.read(clipboardHistoryProvider.notifier).prependItem(dbItem);
+            } catch (e) {
+              debugPrint('[SyncService] Error writing remote clipboard: $e');
+            } finally {
+              _currentlyUploadingPayload = null;
+            }
+          }
+        }
+      }
+    } catch (e, stack) {
+      debugPrint('[SyncService] Error during syncClipboard: $e\n$stack');
+    }
   }
 
   // ── Local clipboard changed ─────────────────────────────────────────────────
@@ -145,6 +256,7 @@ class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
       // Deduplicate: skip if this is the same as the last thing we uploaded
       // OR the same as the last thing we wrote from a remote event.
       if (clipService.isSameContent(payload, _lastUploadedPayload)) return;
+      if (clipService.isSameContent(payload, _currentlyUploadingPayload)) return;
 
       // Length constraint for text content
       if (payload.contentType != 'image' && 
@@ -152,7 +264,8 @@ class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
         return;
       }
 
-      state = const AsyncData(SyncStatus.syncing);
+      _currentlyUploadingPayload = payload;
+      state = AsyncData(SyncState.syncing());
       final repo = ref.read(clipboardRepositoryProvider);
 
       String? storagePath;
@@ -161,7 +274,12 @@ class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
         final path = '$_userId/$fileName';
         storagePath = await repo.uploadImage(path, payload.imageBytes!);
         if (storagePath == null) {
-          state = const AsyncData(SyncStatus.error);
+          state = AsyncData(SyncState.error(
+            'Failed to upload image to Supabase storage.',
+            'Location: clipboard_sync_service.dart:_uploadCurrentClipboard\n'
+            'Operation: repo.uploadImage\n'
+            'Path: $path',
+          ));
           return;
         }
       }
@@ -175,19 +293,29 @@ class ClipboardSyncService extends AsyncNotifier<SyncStatus> {
       );
 
       if (inserted == null) {
-        state = const AsyncData(SyncStatus.error);
+        state = AsyncData(SyncState.error(
+          'Failed to save clipboard item to database.',
+          'Location: clipboard_sync_service.dart:_uploadCurrentClipboard\n'
+          'Operation: repo.insertItem\n'
+          'Content Type: ${payload.contentType}',
+        ));
         // Do not update _lastUploadedPayload so the upload can be retried later
         return;
       }
 
       _lastUploadedPayload = payload;
-      state = const AsyncData(SyncStatus.idle);
+      state = AsyncData(SyncState.idle());
       
       final displayTxt = payload.contentType == 'image' ? '[Image]' : payload.storageContent;
       debugPrint('[SyncService] uploaded: "${displayTxt.substring(0, displayTxt.length.clamp(0, 40))}..."');
     } catch (e, stack) {
-      state = const AsyncData(SyncStatus.error);
+      state = AsyncData(SyncState.error(
+        e.toString(),
+        'Location: clipboard_sync_service.dart:_uploadCurrentClipboard (catch block)\n\nStack Trace:\n$stack',
+      ));
       debugPrint('[SyncService] Error uploading clipboard content: $e\n$stack');
+    } finally {
+      _currentlyUploadingPayload = null;
     }
   }
 

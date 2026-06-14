@@ -46,8 +46,8 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
 
   @override
   Widget build(BuildContext context) {
-    final syncStatus = ref.watch(clipboardSyncServiceProvider);
-    final isPaused = syncStatus.valueOrNull == SyncStatus.paused;
+    final syncState = ref.watch(clipboardSyncServiceProvider).valueOrNull;
+    final isPaused = syncState?.status == SyncStatus.paused;
 
     return Scaffold(
       backgroundColor: AppTheme.surface,
@@ -85,10 +85,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           const SizedBox(height: 16),
           _sectionHeader('SHORTCUT'),
           _buildShortcutTile(),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-          _sectionHeader('HISTORY'),
-          _buildClearHistoryTile(),
           const Divider(height: 1),
           const SizedBox(height: 16),
           _sectionHeader('ACCOUNT'),
@@ -249,61 +245,6 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
           );
           if (confirmed == true && mounted) {
             await ref.read(authNotifierProvider.notifier).signOut();
-          }
-        },
-      ),
-    );
-  }
-
-  Widget _buildClearHistoryTile() {
-    return Container(
-      color: AppTheme.surfaceCard,
-      child: ListTile(
-        leading: const Icon(Icons.delete_sweep, color: AppTheme.error, size: 20),
-        title: const Text(
-          'Clear Clipboard History',
-          style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-        ),
-        subtitle: const Text(
-          'Permanently deletes all text and image clips.',
-          style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
-        ),
-        onTap: () async {
-          final confirmed = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: AppTheme.surfaceCard,
-              shape: const RoundedRectangleBorder(),
-              title: const Text(
-                'Delete all history?',
-                style: TextStyle(color: AppTheme.textPrimary, fontSize: 16),
-              ),
-              content: const Text(
-                'This will permanently remove all your synced clipboard items and image files. This action cannot be undone.',
-                style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(false),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(true),
-                  child: const Text(
-                    'Clear All',
-                    style: TextStyle(color: AppTheme.error),
-                  ),
-                ),
-              ],
-            ),
-          );
-          if (confirmed == true && mounted) {
-            await ref.read(clipboardHistoryProvider.notifier).clearAll();
-            if (mounted) {
-              ScaffoldMessenger.of(context).showSnackBar(
-                const SnackBar(content: Text('Clipboard history cleared')),
-              );
-            }
           }
         },
       ),

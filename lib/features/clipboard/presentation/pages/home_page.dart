@@ -50,8 +50,8 @@ class _HomePageState extends ConsumerState<HomePage> {
   // ── AppBar ──────────────────────────────────────────────────────────────────
 
   PreferredSizeWidget _buildAppBar() {
-    final syncStatus = ref.watch(clipboardSyncServiceProvider);
-    final status = syncStatus.valueOrNull ?? SyncStatus.idle;
+    final syncState = ref.watch(clipboardSyncServiceProvider).valueOrNull;
+    final status = syncState?.status ?? SyncStatus.idle;
     final isPaused = status == SyncStatus.paused;
 
     return AppBar(
@@ -83,7 +83,7 @@ class _HomePageState extends ConsumerState<HomePage> {
         // Sync status indicator
         Padding(
           padding: const EdgeInsets.symmetric(vertical: 14),
-          child: _SyncBadge(status: status),
+          child: _SyncBadge(syncState: syncState),
         ),
         const SizedBox(width: 8),
 
@@ -109,6 +109,8 @@ class _HomePageState extends ConsumerState<HomePage> {
               color: AppTheme.textSecondary, size: 20),
           itemBuilder: (_) => [
             _menuItem('settings', Icons.settings_outlined, 'Settings'),
+            _menuItem('clear_history', Icons.delete_sweep, 'Clear History',
+                color: AppTheme.error),
             const PopupMenuDivider(),
             _menuItem('signout', Icons.logout, 'Sign Out',
                 color: AppTheme.error),
@@ -116,6 +118,43 @@ class _HomePageState extends ConsumerState<HomePage> {
           onSelected: (value) async {
             if (value == 'settings') {
               context.go('/settings');
+            } else if (value == 'clear_history') {
+              final confirmed = await showDialog<bool>(
+                context: context,
+                builder: (ctx) => AlertDialog(
+                  backgroundColor: AppTheme.surfaceCard,
+                  shape: const RoundedRectangleBorder(),
+                  title: const Text(
+                    'Delete all history?',
+                    style: TextStyle(color: AppTheme.textPrimary, fontSize: 16),
+                  ),
+                  content: const Text(
+                    'This will permanently remove all your synced clipboard items and image files. This action cannot be undone.',
+                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                  ),
+                  actions: [
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(false),
+                      child: const Text('Cancel'),
+                    ),
+                    TextButton(
+                      onPressed: () => Navigator.of(ctx).pop(true),
+                      child: const Text(
+                        'Clear All',
+                        style: TextStyle(color: AppTheme.error),
+                      ),
+                    ),
+                  ],
+                ),
+              );
+              if (confirmed == true && mounted) {
+                await ref.read(clipboardHistoryProvider.notifier).clearAll();
+                if (mounted) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Clipboard history cleared')),
+                  );
+                }
+              }
             } else if (value == 'signout') {
               await ref.read(authNotifierProvider.notifier).signOut();
             }
@@ -296,11 +335,12 @@ class _HomePageState extends ConsumerState<HomePage> {
 // ── Sync Status Badge ──────────────────────────────────────────────────────────
 
 class _SyncBadge extends StatelessWidget {
-  const _SyncBadge({required this.status});
-  final SyncStatus status;
+  const _SyncBadge({required this.syncState});
+  final SyncState? syncState;
 
   @override
   Widget build(BuildContext context) {
+    final status = syncState?.status ?? SyncStatus.idle;
     final (label, color) = switch (status) {
       SyncStatus.syncing => ('Syncing', AppTheme.accent),
       SyncStatus.paused  => ('Paused',  AppTheme.warning),
@@ -308,7 +348,7 @@ class _SyncBadge extends StatelessWidget {
       _                  => ('Live',    AppTheme.success),
     };
 
-    return Container(
+    final badgeContent = Container(
       padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
       decoration: BoxDecoration(
         border: Border.all(color: color.withAlpha(150)),
@@ -325,6 +365,109 @@ class _SyncBadge extends StatelessWidget {
               color: color,
               fontSize: 11,
               fontWeight: FontWeight.w600,
+            ),
+          ),
+        ],
+      ),
+    );
+
+    if (status == SyncStatus.error) {
+      return Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: () => _showErrorDialog(context),
+          hoverColor: color.withAlpha(40),
+          highlightColor: color.withAlpha(60),
+          child: Tooltip(
+            message: 'Click to view error details',
+            child: badgeContent,
+          ),
+        ),
+      );
+    }
+
+    return badgeContent;
+  }
+
+  void _showErrorDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: AppTheme.surfaceCard,
+        shape: const RoundedRectangleBorder(),
+        title: Row(
+          children: const [
+            Icon(Icons.error_outline, color: AppTheme.error, size: 22),
+            SizedBox(width: 8),
+            Text(
+              'Sync Error Details',
+              style: TextStyle(
+                color: AppTheme.textPrimary,
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+          ],
+        ),
+        content: Container(
+          width: double.maxFinite,
+          constraints: const BoxConstraints(maxHeight: 400),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                const Text(
+                  'Error Message:',
+                  style: TextStyle(
+                    color: AppTheme.textPrimary,
+                    fontSize: 13,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  syncState?.errorMessage ?? 'An unknown error occurred during synchronization.',
+                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+                ),
+                if (syncState?.errorDetails != null) ...[
+                  const SizedBox(height: 16),
+                  const Text(
+                    'Error Location / Stack Trace:',
+                    style: TextStyle(
+                      color: AppTheme.textPrimary,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  const SizedBox(height: 6),
+                  Container(
+                    width: double.maxFinite,
+                    padding: const EdgeInsets.all(10),
+                    decoration: BoxDecoration(
+                      color: AppTheme.surface,
+                      border: Border.all(color: AppTheme.border),
+                    ),
+                    child: SelectableText(
+                      syncState!.errorDetails!,
+                      style: const TextStyle(
+                        color: AppTheme.textMuted,
+                        fontFamily: 'monospace',
+                        fontSize: 11,
+                      ),
+                    ),
+                  ),
+                ],
+              ],
+            ),
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text(
+              'Close',
+              style: TextStyle(color: AppTheme.primary),
             ),
           ),
         ],

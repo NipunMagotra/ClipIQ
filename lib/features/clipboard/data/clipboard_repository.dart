@@ -100,28 +100,36 @@ class ClipboardRepository {
     required String userId,
     required void Function(ClipboardItem item) onInsert,
   }) {
-    return _client
-        .channel(AppConstants.realtimeChannel)
-        .onPostgresChanges(
-          event: PostgresChangeEvent.insert,
-          schema: 'public',
-          table: AppConstants.clipboardsTable,
-          filter: PostgresChangeFilter(
-            type: PostgresChangeFilterType.eq,
-            column: 'user_id',
-            value: userId,
-          ),
-          callback: (payload) {
-            try {
-              final item = ClipboardItem.fromMap(
-                  Map<String, dynamic>.from(payload.newRecord));
-              onInsert(item);
-            } catch (e) {
-              debugPrint('[ClipboardRepository] realtime parse error: $e');
-            }
-          },
-        )
-        .subscribe();
+    final channel = _client.channel(AppConstants.realtimeChannel);
+    
+    channel.onPostgresChanges(
+      event: PostgresChangeEvent.insert,
+      schema: 'public',
+      table: AppConstants.clipboardsTable,
+      filter: PostgresChangeFilter(
+        type: PostgresChangeFilterType.eq,
+        column: 'user_id',
+        value: userId,
+      ),
+      callback: (payload) {
+        try {
+          final item = ClipboardItem.fromMap(
+              Map<String, dynamic>.from(payload.newRecord));
+          onInsert(item);
+        } catch (e) {
+          debugPrint('[ClipboardRepository] realtime parse error: $e');
+        }
+      },
+    );
+
+    channel.subscribe((status, [error]) {
+      debugPrint('[Realtime] Subscription status for channel: $status');
+      if (error != null) {
+        debugPrint('[Realtime] Subscription error: $error');
+      }
+    });
+
+    return channel;
   }
 
   // ── Image Storage ──────────────────────────────────────────────────────────

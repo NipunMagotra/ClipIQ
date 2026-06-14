@@ -69,6 +69,15 @@ class ClipboardHistoryNotifier extends AsyncNotifier<List<ClipboardItem>> {
     state = AsyncData(await repo.fetchHistory());
   }
 
+  /// Silently refreshes the history list in the background without showing a loading spinner.
+  Future<void> silentRefresh() async {
+    final user = Supabase.instance.client.auth.currentUser;
+    if (user == null) return;
+    final repo = ref.read(clipboardRepositoryProvider);
+    final items = await repo.fetchHistory();
+    state = AsyncData(items);
+  }
+
   /// Clears the entire clipboard history.
   Future<void> clearAll() async {
     final user = Supabase.instance.client.auth.currentUser;
