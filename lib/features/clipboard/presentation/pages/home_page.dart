@@ -1,20 +1,22 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:go_router/go_router.dart';
-
 import '../../../../core/theme/app_theme.dart';
-import '../../../auth/presentation/auth_notifier.dart';
+import '../../../../core/widgets/design_components.dart';
 import '../../application/clipboard_sync_service.dart';
+import '../../data/models/clipboard_item.dart';
 import '../notifiers/clipboard_history_notifier.dart';
 import '../widgets/clip_card.dart';
 
-/// Main home screen of ClipQ.
+/// Main home screen of ClipQ — redesigned with premium Linear/Raycast aesthetics.
 ///
 /// Layout:
-///  - AppBar with sync status + pause button + user menu
-///  - Search field
-///  - Clipboard history list (paginated)
-///  - Empty / loading / error states
+///   AppHeader
+///   SearchField
+///   FilterChips
+///   Divider
+///   ClipboardList  or  EmptyState
+///   FooterStatusBar
 class HomePage extends ConsumerStatefulWidget {
   const HomePage({super.key});
 
@@ -24,7 +26,9 @@ class HomePage extends ConsumerStatefulWidget {
 
 class _HomePageState extends ConsumerState<HomePage> {
   final _searchController = TextEditingController();
+  final _searchFieldKey = GlobalKey<SearchFieldState>();
   String _searchQuery = '';
+  ClipFilter _selectedFilter = ClipFilter.all;
 
   @override
   void dispose() {
@@ -32,187 +36,45 @@ class _HomePageState extends ConsumerState<HomePage> {
     super.dispose();
   }
 
+  // ── Keyboard shortcut: Ctrl+Alt+V / Ctrl+K → focus search ────────────────
+  KeyEventResult _handleKeyEvent(FocusNode node, KeyEvent event) {
+    if (event is KeyDownEvent &&
+        event.logicalKey == LogicalKeyboardKey.keyK &&
+        HardwareKeyboard.instance.isControlPressed) {
+      _searchFieldKey.currentState?.focusNode.requestFocus();
+      return KeyEventResult.handled;
+    }
+    return KeyEventResult.ignored;
+  }
+
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      backgroundColor: AppTheme.surface,
-      appBar: _buildAppBar(),
-      body: Column(
-        children: [
-          _buildSearchBar(),
-          const Divider(height: 1),
-          Expanded(child: _buildHistoryList()),
-        ],
-      ),
-    );
-  }
-
-  // ── AppBar ──────────────────────────────────────────────────────────────────
-
-  PreferredSizeWidget _buildAppBar() {
-    final syncState = ref.watch(clipboardSyncServiceProvider).valueOrNull;
-    final status = syncState?.status ?? SyncStatus.idle;
-    final isPaused = status == SyncStatus.paused;
-
-    return AppBar(
-      backgroundColor: AppTheme.surface,
-      elevation: 0,
-      bottom: const PreferredSize(
-        preferredSize: Size.fromHeight(1),
-        child: Divider(height: 1, color: AppTheme.border),
-      ),
-      title: Row(
-        children: [
-          Icon(
-            Icons.content_paste,
-            color: AppTheme.primary,
-            size: 20,
-          ),
-          const SizedBox(width: 8),
-          const Text(
-            'ClipQ',
-            style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 18,
-              fontWeight: FontWeight.w700,
+    return Focus(
+      onKeyEvent: _handleKeyEvent,
+      child: Scaffold(
+        backgroundColor: AppTheme.background,
+        body: Column(
+          children: [
+            const AppHeader(),
+            SearchField(
+              key: _searchFieldKey,
+              controller: _searchController,
+              onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
             ),
-          ),
-        ],
-      ),
-      actions: [
-        // Sync status indicator
-        Padding(
-          padding: const EdgeInsets.symmetric(vertical: 14),
-          child: _SyncBadge(syncState: syncState),
-        ),
-        const SizedBox(width: 8),
-
-        // Pause / Resume
-        Tooltip(
-          message: isPaused ? 'Resume sync' : 'Pause sync',
-          child: IconButton(
-            onPressed: () =>
-                ref.read(clipboardSyncServiceProvider.notifier).togglePause(),
-            icon: Icon(
-              isPaused ? Icons.play_arrow : Icons.pause,
-              color: AppTheme.textSecondary,
-              size: 20,
+            FilterChips(
+              selected: _selectedFilter,
+              onChanged: (f) => setState(() => _selectedFilter = f),
             ),
-          ),
-        ),
-
-        // User menu
-        PopupMenuButton<String>(
-          color: AppTheme.surfaceCard,
-          shape: const RoundedRectangleBorder(),
-          icon: const Icon(Icons.person_outline,
-              color: AppTheme.textSecondary, size: 20),
-          itemBuilder: (_) => [
-            _menuItem('settings', Icons.settings_outlined, 'Settings'),
-            _menuItem('clear_history', Icons.delete_sweep, 'Clear History',
-                color: AppTheme.error),
-            const PopupMenuDivider(),
-            _menuItem('signout', Icons.logout, 'Sign Out',
-                color: AppTheme.error),
+            const Divider(height: 1, color: AppTheme.divider),
+            Expanded(child: _buildHistoryList()),
+            _buildFooter(),
           ],
-          onSelected: (value) async {
-            if (value == 'settings') {
-              context.go('/settings');
-            } else if (value == 'clear_history') {
-              final confirmed = await showDialog<bool>(
-                context: context,
-                builder: (ctx) => AlertDialog(
-                  backgroundColor: AppTheme.surfaceCard,
-                  shape: const RoundedRectangleBorder(),
-                  title: const Text(
-                    'Delete all history?',
-                    style: TextStyle(color: AppTheme.textPrimary, fontSize: 16),
-                  ),
-                  content: const Text(
-                    'This will permanently remove all your synced clipboard items and image files. This action cannot be undone.',
-                    style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-                  ),
-                  actions: [
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(false),
-                      child: const Text('Cancel'),
-                    ),
-                    TextButton(
-                      onPressed: () => Navigator.of(ctx).pop(true),
-                      child: const Text(
-                        'Clear All',
-                        style: TextStyle(color: AppTheme.error),
-                      ),
-                    ),
-                  ],
-                ),
-              );
-              if (confirmed == true && mounted) {
-                await ref.read(clipboardHistoryProvider.notifier).clearAll();
-                if (mounted) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    const SnackBar(content: Text('Clipboard history cleared')),
-                  );
-                }
-              }
-            } else if (value == 'signout') {
-              await ref.read(authNotifierProvider.notifier).signOut();
-            }
-          },
-        ),
-        const SizedBox(width: 4),
-      ],
-    );
-  }
-
-  PopupMenuItem<String> _menuItem(String value, IconData icon, String label,
-      {Color? color}) {
-    final c = color ?? AppTheme.textPrimary;
-    return PopupMenuItem(
-      value: value,
-      child: Row(
-        children: [
-          Icon(icon, color: c, size: 16),
-          const SizedBox(width: 10),
-          Text(label,
-              style: TextStyle(
-                  color: c, fontSize: 14, fontWeight: FontWeight.w400)),
-        ],
-      ),
-    );
-  }
-
-  // ── Search bar ──────────────────────────────────────────────────────────────
-
-  Widget _buildSearchBar() {
-    return Container(
-      color: AppTheme.surface,
-      padding: const EdgeInsets.fromLTRB(12, 10, 12, 10),
-      child: TextField(
-        controller: _searchController,
-        style: const TextStyle(
-            color: AppTheme.textPrimary, fontSize: 14),
-        onChanged: (v) => setState(() => _searchQuery = v.toLowerCase()),
-        decoration: InputDecoration(
-          hintText: 'Search clipboard history…',
-          prefixIcon:
-              const Icon(Icons.search, color: AppTheme.textMuted, size: 18),
-          suffixIcon: _searchQuery.isNotEmpty
-              ? GestureDetector(
-                  onTap: () {
-                    _searchController.clear();
-                    setState(() => _searchQuery = '');
-                  },
-                  child: const Icon(Icons.close,
-                      color: AppTheme.textMuted, size: 16),
-                )
-              : null,
         ),
       ),
     );
   }
 
-  // ── History list ────────────────────────────────────────────────────────────
+  // ── History List ────────────────────────────────────────────────────────────
 
   Widget _buildHistoryList() {
     final historyAsync = ref.watch(clipboardHistoryProvider);
@@ -220,32 +82,56 @@ class _HomePageState extends ConsumerState<HomePage> {
     return historyAsync.when(
       loading: () => const Center(
         child: CircularProgressIndicator(
-            color: AppTheme.primary, strokeWidth: 2),
+          color: AppTheme.accent,
+          strokeWidth: 2,
+        ),
       ),
       error: (e, _) => _buildError(e.toString()),
       data: (items) {
-        final filtered = _searchQuery.isEmpty
-            ? items
-            : items
-                .where(
-                    (i) => i.preview.toLowerCase().contains(_searchQuery))
-                .toList();
+        var filtered = items.where((i) {
+          // Content type filter
+          if (_selectedFilter != ClipFilter.all) {
+            final matchesType = switch (_selectedFilter) {
+              ClipFilter.text   => i.contentType == 'text',
+              ClipFilter.code   => i.contentType == 'text' &&
+                  _looksLikeCode(i.textContent ?? ''),
+              ClipFilter.links  => i.contentType == 'text' &&
+                  _looksLikeUrl(i.textContent ?? ''),
+              ClipFilter.images => i.contentType == 'image',
+              ClipFilter.html   => i.contentType == 'html',
+              ClipFilter.all    => true,
+            };
+            if (!matchesType) return false;
+          }
+          // Search filter
+          if (_searchQuery.isNotEmpty) {
+            return i.preview.toLowerCase().contains(_searchQuery);
+          }
+          return true;
+        }).toList();
 
         if (filtered.isEmpty) return _buildEmpty();
 
+        // Group items by date
+        final sections = _groupByDate(filtered);
+
         return RefreshIndicator(
-          color: AppTheme.primary,
+          color: AppTheme.accent,
           backgroundColor: AppTheme.surfaceCard,
           onRefresh: () =>
               ref.read(clipboardHistoryProvider.notifier).refresh(),
           child: ListView.builder(
             padding: EdgeInsets.zero,
-            itemCount: filtered.length + 1,
+            itemCount: sections.length,
             itemBuilder: (ctx, i) {
-              if (i == filtered.length) {
-                return _buildLoadMore();
+              final section = sections[i];
+              if (section is _DateHeader) {
+                return _buildDateHeader(section.label);
               }
-              return ClipCard(item: filtered[i], index: i);
+              return ClipCard(
+                item: (section as _ClipEntry).item,
+                index: (section).index,
+              );
             },
           ),
         );
@@ -253,225 +139,184 @@ class _HomePageState extends ConsumerState<HomePage> {
     );
   }
 
-  Widget _buildEmpty() {
-    return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.content_paste_off,
-              color: AppTheme.textMuted, size: 40),
-          const SizedBox(height: 16),
-          const Text(
-            'No clips yet',
-            style: TextStyle(
-              color: AppTheme.textPrimary,
-              fontSize: 16,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            _searchQuery.isNotEmpty
-                ? 'No clips match "$_searchQuery"'
-                : 'Copy anything on this device and it will appear here.',
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 13),
-            textAlign: TextAlign.center,
-          ),
-        ],
+  // ── Date Grouping ──────────────────────────────────────────────────────────
+
+  List<Object> _groupByDate(List<ClipboardItem> items) {
+    final result = <Object>[];
+    String? lastLabel;
+
+    for (var i = 0; i < items.length; i++) {
+      final label = _dateLabel(items[i].copiedAt);
+      if (label != lastLabel) {
+        result.add(_DateHeader(label));
+        lastLabel = label;
+      }
+      result.add(_ClipEntry(items[i], i));
+    }
+    return result;
+  }
+
+  String _dateLabel(DateTime dt) {
+    final now = DateTime.now();
+    final today = DateTime(now.year, now.month, now.day);
+    final itemDay = DateTime(dt.year, dt.month, dt.day);
+    final diff = today.difference(itemDay).inDays;
+
+    if (diff == 0) return 'Today';
+    if (diff == 1) return 'Yesterday';
+    if (diff <= 7) return 'This Week';
+    return 'Older';
+  }
+
+  Widget _buildDateHeader(String label) {
+    return Padding(
+      padding: const EdgeInsets.fromLTRB(16, 16, 16, 6),
+      child: Text(
+        label.toUpperCase(),
+        style: AppTheme.headingSection,
       ),
     );
   }
+
+  // ── Heuristics ─────────────────────────────────────────────────────────────
+
+  bool _looksLikeCode(String text) {
+    final codeIndicators = ['{', '}', '=>', 'function', 'class ', 'import ',
+        'const ', 'var ', 'let ', 'def ', 'return ', ';', '()', '[]'];
+    final lower = text.toLowerCase();
+    return codeIndicators.any((ind) => lower.contains(ind));
+  }
+
+  bool _looksLikeUrl(String text) {
+    final t = text.trim();
+    return t.startsWith('http://') ||
+        t.startsWith('https://') ||
+        t.startsWith('www.') ||
+        RegExp(r'^[\w.-]+\.\w{2,}(/|$)').hasMatch(t);
+  }
+
+  // ── Empty State ────────────────────────────────────────────────────────────
+
+  Widget _buildEmpty() {
+    return Center(
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            const ClipTextIcon(size: 24, color: AppTheme.textMuted),
+            const SizedBox(height: 16),
+            Text(
+              _searchQuery.isNotEmpty
+                  ? 'No matching clips'
+                  : 'Clipboard is empty',
+              style: AppTheme.uiStrong.copyWith(fontSize: 14),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 6),
+            Text(
+              _searchQuery.isNotEmpty
+                  ? 'No clips match "$_searchQuery"'
+                  : 'Copy anything to sync across devices',
+              style: AppTheme.uiBody.copyWith(color: AppTheme.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  // ── Error State ────────────────────────────────────────────────────────────
 
   Widget _buildError(String message) {
     return Center(
-      child: Column(
-        mainAxisAlignment: MainAxisAlignment.center,
-        children: [
-          const Icon(Icons.cloud_off, color: AppTheme.error, size: 36),
-          const SizedBox(height: 16),
-          const Text(
-            'Connection error',
-            style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.w600),
-          ),
-          const SizedBox(height: 6),
-          Text(
-            message,
-            style: const TextStyle(
-                color: AppTheme.textSecondary, fontSize: 12),
-            textAlign: TextAlign.center,
-          ),
-          const SizedBox(height: 20),
-          OutlinedButton(
-            onPressed: () =>
-                ref.read(clipboardHistoryProvider.notifier).refresh(),
-            child: const Text('Retry'),
-          ),
-        ],
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 40),
+        child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: AppTheme.error.withOpacity(0.1),
+                borderRadius: BorderRadius.circular(8),
+              ),
+              child: const Icon(Icons.cloud_off_rounded,
+                  color: AppTheme.error, size: 20),
+            ),
+            const SizedBox(height: 16),
+            Text('Connection error', style: AppTheme.uiStrong),
+            const SizedBox(height: 6),
+            Text(
+              message,
+              style: AppTheme.uiBody.copyWith(color: AppTheme.textSecondary),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 16),
+            OutlinedButton(
+              onPressed: () =>
+                  ref.read(clipboardHistoryProvider.notifier).refresh(),
+              child: const Text('Retry'),
+            ),
+          ],
+        ),
       ),
     );
   }
 
-  Widget _buildLoadMore() {
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 12),
-      child: Center(
-        child: TextButton.icon(
-          onPressed: () =>
-              ref.read(clipboardHistoryProvider.notifier).loadMore(),
-          icon: const Icon(Icons.expand_more, size: 16),
-          label: const Text('Load more'),
-          style: TextButton.styleFrom(
-              foregroundColor: AppTheme.textSecondary),
+  // ── Footer Status Bar ──────────────────────────────────────────────────────
+
+  Widget _buildFooter() {
+    final historyAsync = ref.watch(clipboardHistoryProvider);
+    final itemCount = historyAsync.valueOrNull?.length ?? 0;
+    final syncState = ref.watch(clipboardSyncServiceProvider).valueOrNull;
+    final statusText = syncState?.status == SyncStatus.paused
+        ? 'Sync paused'
+        : 'Synced';
+
+    return Container(
+      height: 28,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: const BoxDecoration(
+        color: AppTheme.background,
+        border: Border(
+          top: BorderSide(color: AppTheme.divider, width: 0.5),
         ),
+      ),
+      child: Row(
+        children: [
+          Text(
+            '$itemCount clip${itemCount == 1 ? '' : 's'} · $statusText',
+            style: AppTheme.uiLabel.copyWith(
+              fontSize: 11,
+              color: AppTheme.textMuted,
+            ),
+          ),
+          const Spacer(),
+          Text(
+            'v2.0.0',
+            style: AppTheme.uiLabel.copyWith(
+              fontSize: 10,
+              color: AppTheme.textMuted.withOpacity(0.5),
+            ),
+          ),
+        ],
       ),
     );
   }
 }
 
-// ── Sync Status Badge ──────────────────────────────────────────────────────────
+// ── Helper classes for date grouping ──────────────────────────────────────────
 
-class _SyncBadge extends StatelessWidget {
-  const _SyncBadge({required this.syncState});
-  final SyncState? syncState;
+class _DateHeader {
+  final String label;
+  const _DateHeader(this.label);
+}
 
-  @override
-  Widget build(BuildContext context) {
-    final status = syncState?.status ?? SyncStatus.idle;
-    final (label, color) = switch (status) {
-      SyncStatus.syncing => ('Syncing', AppTheme.accent),
-      SyncStatus.paused  => ('Paused',  AppTheme.warning),
-      SyncStatus.error   => ('Error',   AppTheme.error),
-      _                  => ('Live',    AppTheme.success),
-    };
-
-    final badgeContent = Container(
-      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-      decoration: BoxDecoration(
-        border: Border.all(color: color.withAlpha(150)),
-        color: color.withAlpha(20),
-      ),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(width: 6, height: 6, color: color),
-          const SizedBox(width: 5),
-          Text(
-            label,
-            style: TextStyle(
-              color: color,
-              fontSize: 11,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (status == SyncStatus.error) {
-      return Material(
-        color: Colors.transparent,
-        child: InkWell(
-          onTap: () => _showErrorDialog(context),
-          hoverColor: color.withAlpha(40),
-          highlightColor: color.withAlpha(60),
-          child: Tooltip(
-            message: 'Click to view error details',
-            child: badgeContent,
-          ),
-        ),
-      );
-    }
-
-    return badgeContent;
-  }
-
-  void _showErrorDialog(BuildContext context) {
-    showDialog(
-      context: context,
-      builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surfaceCard,
-        shape: const RoundedRectangleBorder(),
-        title: Row(
-          children: const [
-            Icon(Icons.error_outline, color: AppTheme.error, size: 22),
-            SizedBox(width: 8),
-            Text(
-              'Sync Error Details',
-              style: TextStyle(
-                color: AppTheme.textPrimary,
-                fontSize: 16,
-                fontWeight: FontWeight.bold,
-              ),
-            ),
-          ],
-        ),
-        content: Container(
-          width: double.maxFinite,
-          constraints: const BoxConstraints(maxHeight: 400),
-          child: SingleChildScrollView(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                const Text(
-                  'Error Message:',
-                  style: TextStyle(
-                    color: AppTheme.textPrimary,
-                    fontSize: 13,
-                    fontWeight: FontWeight.bold,
-                  ),
-                ),
-                const SizedBox(height: 4),
-                Text(
-                  syncState?.errorMessage ?? 'An unknown error occurred during synchronization.',
-                  style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-                ),
-                if (syncState?.errorDetails != null) ...[
-                  const SizedBox(height: 16),
-                  const Text(
-                    'Error Location / Stack Trace:',
-                    style: TextStyle(
-                      color: AppTheme.textPrimary,
-                      fontSize: 13,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                  const SizedBox(height: 6),
-                  Container(
-                    width: double.maxFinite,
-                    padding: const EdgeInsets.all(10),
-                    decoration: BoxDecoration(
-                      color: AppTheme.surface,
-                      border: Border.all(color: AppTheme.border),
-                    ),
-                    child: SelectableText(
-                      syncState!.errorDetails!,
-                      style: const TextStyle(
-                        color: AppTheme.textMuted,
-                        fontFamily: 'monospace',
-                        fontSize: 11,
-                      ),
-                    ),
-                  ),
-                ],
-              ],
-            ),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.of(ctx).pop(),
-            child: const Text(
-              'Close',
-              style: TextStyle(color: AppTheme.primary),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
+class _ClipEntry {
+  final ClipboardItem item;
+  final int index;
+  const _ClipEntry(this.item, this.index);
 }

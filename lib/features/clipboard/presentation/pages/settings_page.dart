@@ -1,15 +1,19 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
+import '../../../../core/constants/app_constants.dart';
 import '../../../../core/services/device_id_service.dart';
 import '../../../../core/theme/app_theme.dart';
 import '../../../auth/presentation/auth_notifier.dart';
 import '../../application/clipboard_sync_service.dart';
-import '../notifiers/clipboard_history_notifier.dart';
 
-/// Settings page for ClipQ.
+/// Flat settings page for ClipQ v2.
+///
+/// Removes grouped cards, uses section headers with trailing hairline dividers,
+/// custom built tiny toggles, inline borderless editing, and zero icons.
 class SettingsPage extends ConsumerStatefulWidget {
   const SettingsPage({super.key});
 
@@ -50,239 +54,366 @@ class _SettingsPageState extends ConsumerState<SettingsPage> {
     final isPaused = syncState?.status == SyncStatus.paused;
 
     return Scaffold(
-      backgroundColor: AppTheme.surface,
-      appBar: AppBar(
-        backgroundColor: AppTheme.surface,
-        elevation: 0,
-        leading: IconButton(
-          icon: const Icon(Icons.arrow_back, color: AppTheme.textSecondary, size: 20),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
-        title: const Text(
-          'Settings',
-          style: TextStyle(
-            color: AppTheme.textPrimary,
-            fontSize: 18,
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        bottom: const PreferredSize(
-          preferredSize: Size.fromHeight(1),
-          child: Divider(height: 1, color: AppTheme.border),
-        ),
-      ),
-      body: ListView(
+      backgroundColor: AppTheme.background,
+      body: Column(
         children: [
-          _sectionHeader('DEVICE'),
-          _buildDeviceNameTile(),
-          const Divider(height: 1),
-          _buildDeviceIdTile(),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-          _sectionHeader('SYNC'),
-          _buildSyncToggle(isPaused),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-          _sectionHeader('SHORTCUT'),
-          _buildShortcutTile(),
-          const Divider(height: 1),
-          const SizedBox(height: 16),
-          _sectionHeader('ACCOUNT'),
-          _buildSignOutTile(),
-          const Divider(height: 1),
-          const SizedBox(height: 32),
-          Center(
-            child: Text(
-              'ClipQ v1.0.0',
-              style: const TextStyle(color: AppTheme.textMuted, fontSize: 12),
+          _buildHeader(),
+          Expanded(
+            child: ListView(
+              padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 8),
+              children: [
+                _sectionHeader('DEVICE'),
+                _buildDeviceNameRow(),
+                const Divider(height: 1, thickness: 0.5, color: AppTheme.border),
+                _buildDeviceIdRow(),
+                const Divider(height: 1, thickness: 0.5, color: AppTheme.border),
+
+                _sectionHeader('SYNC'),
+                _buildSyncRow(isPaused),
+                const Divider(height: 1, thickness: 0.5, color: AppTheme.border),
+
+                _sectionHeader('SHORTCUT'),
+                _buildShortcutRow(),
+                const Divider(height: 1, thickness: 0.5, color: AppTheme.border),
+
+                _sectionHeader('ACCOUNT'),
+                _buildSignOutRow(),
+                const Divider(height: 1, thickness: 0.5, color: AppTheme.border),
+
+                const SizedBox(height: 48),
+                _buildAboutSection(),
+                const SizedBox(height: 24),
+              ],
             ),
           ),
-          const SizedBox(height: 24),
         ],
       ),
     );
   }
 
-  Widget _sectionHeader(String title) {
+  // ── Header ──────────────────────────────────────────────────────────────────
+
+  Widget _buildHeader() {
     return Container(
-      padding: const EdgeInsets.fromLTRB(16, 16, 16, 8),
-      child: Text(
-        title,
-        style: const TextStyle(
-          color: AppTheme.textMuted,
-          fontSize: 11,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 1.2,
+      height: 40,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: const BoxDecoration(
+        color: AppTheme.background,
+        border: Border(
+          bottom: BorderSide(color: AppTheme.border, width: 0.5),
+        ),
+      ),
+      child: Row(
+        children: [
+          GestureDetector(
+            onTap: () => Navigator.of(context).pop(),
+            behavior: HitTestBehavior.opaque,
+            child: MouseRegion(
+              cursor: SystemMouseCursors.click,
+              child: Text(
+                '← Settings',
+                style: AppTheme.uiLabel.copyWith(
+                  color: AppTheme.textSecondary,
+                  fontWeight: FontWeight.w500,
+                  fontSize: 13,
+                ),
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Section Header ──────────────────────────────────────────────────────────
+
+  Widget _sectionHeader(String title) {
+    return Padding(
+      padding: const EdgeInsets.only(top: 24, bottom: 8),
+      child: Row(
+        children: [
+          Text(
+            title,
+            style: AppTheme.uiLabel.copyWith(
+              fontSize: 11,
+              fontWeight: FontWeight.w600,
+              color: AppTheme.textMuted,
+              letterSpacing: 0.6,
+            ),
+          ),
+          const SizedBox(width: 8),
+          const Expanded(
+            child: Divider(
+              color: AppTheme.border,
+              thickness: 0.5,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Device Name Row ─────────────────────────────────────────────────────────
+
+  Widget _buildDeviceNameRow() {
+    return SizedBox(
+      height: 44,
+      child: Row(
+        children: [
+          Text(
+            'Device Name',
+            style: AppTheme.uiBody.copyWith(color: AppTheme.textPrimary),
+          ),
+          const Spacer(),
+          SizedBox(
+            width: 180,
+            child: TextField(
+              controller: _nameController,
+              textAlign: TextAlign.end,
+              style: AppTheme.uiBody.copyWith(color: AppTheme.textSecondary),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                enabledBorder: InputBorder.none,
+                focusedBorder: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+                isDense: true,
+              ),
+              cursorColor: AppTheme.accent,
+              onSubmitted: (v) => DeviceIdService.setDeviceName(v.trim()),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Device ID Row ───────────────────────────────────────────────────────────
+
+  Widget _buildDeviceIdRow() {
+    final displayId = _deviceId.isEmpty
+        ? '…'
+        : _deviceId.substring(0, _deviceId.length.clamp(0, 8)) + '...';
+
+    return InkWell(
+      onTap: () {
+        Clipboard.setData(ClipboardData(text: _deviceId));
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Device ID copied to clipboard')),
+        );
+      },
+      child: SizedBox(
+        height: 44,
+        child: Row(
+          children: [
+            Text(
+              'Device ID',
+              style: AppTheme.uiBody.copyWith(color: AppTheme.textPrimary),
+            ),
+            const Spacer(),
+            Text(
+              displayId,
+              style: AppTheme.contentMono.copyWith(
+                color: AppTheme.textMuted,
+                fontSize: 12,
+              ),
+            ),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildDeviceNameTile() {
-    return Container(
-      color: AppTheme.surfaceCard,
-      padding: const EdgeInsets.fromLTRB(16, 14, 16, 14),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+  // ── Sync Row ────────────────────────────────────────────────────────────────
+
+  Widget _buildSyncRow(bool isPaused) {
+    return SizedBox(
+      height: 44,
+      child: Row(
         children: [
+          Text(
+            'Clipboard Sync',
+            style: AppTheme.uiBody.copyWith(color: AppTheme.textPrimary),
+          ),
+          const Spacer(),
+          CustomToggle(
+            value: !isPaused,
+            onChanged: (_) =>
+                ref.read(clipboardSyncServiceProvider.notifier).togglePause(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Shortcut Row ────────────────────────────────────────────────────────────
+
+  Widget _buildShortcutRow() {
+    final isMac = !kIsWeb && Platform.isMacOS;
+    final keys = isMac
+        ? ['⌥', '⌘', 'V']
+        : ['Alt', 'Ctrl', 'V'];
+
+    return SizedBox(
+      height: 44,
+      child: Row(
+        children: [
+          Text(
+            'Toggle Window',
+            style: AppTheme.uiBody.copyWith(color: AppTheme.textPrimary),
+          ),
+          const Spacer(),
           Row(
-            children: const [
-              Icon(Icons.computer, color: AppTheme.textMuted, size: 16),
-              SizedBox(width: 10),
-              Text(
-                'Device Name',
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 14,
-                  fontWeight: FontWeight.w500,
-                ),
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              for (var i = 0; i < keys.length; i++) ...[
+                if (i > 0)
+                  Padding(
+                    padding: const EdgeInsets.symmetric(horizontal: 4),
+                    child: Text('+', style: AppTheme.uiLabel.copyWith(color: AppTheme.textMuted, fontSize: 10)),
+                  ),
+                _KbdPill(label: keys[i]),
+              ],
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Sign Out Row ────────────────────────────────────────────────────────────
+
+  Widget _buildSignOutRow() {
+    return InkWell(
+      onTap: () async {
+        final confirmed = await showDialog<bool>(
+          context: context,
+          builder: (ctx) => AlertDialog(
+            title: Text('Sign Out?', style: AppTheme.uiStrong),
+            content: Text(
+              'Your clipboard history will remain stored in the cloud.',
+              style: AppTheme.uiBody.copyWith(color: AppTheme.textSecondary),
+            ),
+            actions: [
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(false),
+                child: const Text('Cancel'),
+              ),
+              TextButton(
+                onPressed: () => Navigator.of(ctx).pop(true),
+                child: Text('Sign Out', style: TextStyle(color: AppTheme.error)),
               ),
             ],
           ),
-          const SizedBox(height: 10),
-          TextField(
-            controller: _nameController,
-            style: const TextStyle(color: AppTheme.textSecondary, fontSize: 13),
-            decoration: const InputDecoration(
-              hintText: 'e.g. My Windows PC',
-              isDense: true,
-              contentPadding:
-                  EdgeInsets.symmetric(horizontal: 10, vertical: 10),
+        );
+        if (confirmed == true && mounted) {
+          await ref.read(authNotifierProvider.notifier).signOut();
+        }
+      },
+      child: SizedBox(
+        height: 44,
+        child: Row(
+          children: [
+            Text(
+              'Sign Out',
+              style: AppTheme.uiBody.copyWith(color: AppTheme.error, fontWeight: FontWeight.w500),
             ),
-            onSubmitted: (v) => DeviceIdService.setDeviceName(v.trim()),
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildDeviceIdTile() {
-    return Container(
-      color: AppTheme.surfaceCard,
-      child: ListTile(
-        leading: const Icon(Icons.fingerprint, color: AppTheme.textMuted, size: 18),
-        title: const Text(
-          'Device ID',
-          style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-        ),
-        subtitle: Text(
-          _deviceId.isEmpty ? '…' : _deviceId,
-          style: const TextStyle(
-            color: AppTheme.textMuted,
-            fontSize: 11,
-            fontFamily: 'monospace',
-          ),
+            const Spacer(),
+          ],
         ),
       ),
     );
   }
 
-  Widget _buildSyncToggle(bool isPaused) {
-    return Container(
-      color: AppTheme.surfaceCard,
-      child: SwitchListTile(
-        value: !isPaused,
-        onChanged: (_) =>
-            ref.read(clipboardSyncServiceProvider.notifier).togglePause(),
-        title: const Text(
-          'Clipboard Sync',
-          style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
+  // ── About Section ───────────────────────────────────────────────────────────
+
+  Widget _buildAboutSection() {
+    return Column(
+      children: [
+        Text(
+          'ClipQ v2.0.0',
+          style: AppTheme.uiLabel.copyWith(color: AppTheme.textMuted, fontSize: 11),
         ),
-        subtitle: Text(
-          isPaused ? 'Sync is paused' : 'Syncing in real-time',
-          style: TextStyle(
-            color: isPaused ? AppTheme.warning : AppTheme.textSecondary,
-            fontSize: 12,
-          ),
+        const SizedBox(height: 2),
+        Text(
+          'Universal Clipboard Sync',
+          style: AppTheme.uiLabel.copyWith(color: AppTheme.textMuted.withOpacity(0.5), fontSize: 10),
         ),
-        secondary: Icon(
-          isPaused ? Icons.sync_disabled : Icons.sync,
-          color: isPaused ? AppTheme.warning : AppTheme.accent,
-          size: 20,
-        ),
-      ),
+      ],
     );
   }
+}
 
-  Widget _buildSignOutTile() {
-    return Container(
-      color: AppTheme.surfaceCard,
-      child: ListTile(
-        leading: const Icon(Icons.logout, color: AppTheme.error, size: 18),
-        title: const Text(
-          'Sign Out',
-          style: TextStyle(color: AppTheme.error, fontSize: 14),
-        ),
-        onTap: () async {
-          final confirmed = await showDialog<bool>(
-            context: context,
-            builder: (ctx) => AlertDialog(
-              backgroundColor: AppTheme.surfaceCard,
-              shape: const RoundedRectangleBorder(),
-              title: const Text(
-                'Sign Out?',
-                style: TextStyle(color: AppTheme.textPrimary, fontSize: 16),
-              ),
-              content: const Text(
-                'Your clipboard history will remain stored on Supabase.',
-                style: TextStyle(
-                    color: AppTheme.textSecondary, fontSize: 13),
-              ),
-              actions: [
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(false),
-                  child: const Text('Cancel'),
-                ),
-                TextButton(
-                  onPressed: () => Navigator.of(ctx).pop(true),
-                  child: const Text(
-                    'Sign Out',
-                    style: TextStyle(color: AppTheme.error),
-                  ),
-                ),
-              ],
-            ),
-          );
-          if (confirmed == true && mounted) {
-            await ref.read(authNotifierProvider.notifier).signOut();
-          }
-        },
-      ),
-    );
-  }
+// ── Custom Toggle Switch ──────────────────────────────────────────────────────
 
-  Widget _buildShortcutTile() {
-    final isMac = !kIsWeb && Platform.isMacOS;
-    final shortcutText = isMac ? '⌥ + ⌘ + V' : 'Alt + Ctrl + V';
+class CustomToggle extends StatelessWidget {
+  const CustomToggle({
+    super.key,
+    required this.value,
+    required this.onChanged,
+  });
 
-    return Container(
-      color: AppTheme.surfaceCard,
-      child: ListTile(
-        leading: const Icon(Icons.keyboard, color: AppTheme.textMuted, size: 20),
-        title: const Text(
-          'Toggle Window Shortcut',
-          style: TextStyle(color: AppTheme.textPrimary, fontSize: 14),
-        ),
-        trailing: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+  final bool value;
+  final ValueChanged<bool> onChanged;
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: () => onChanged(!value),
+      behavior: HitTestBehavior.opaque,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          width: 32,
+          height: 18,
+          padding: const EdgeInsets.all(2),
           decoration: BoxDecoration(
-            color: AppTheme.surface,
-            borderRadius: BorderRadius.circular(4),
-            border: Border.all(color: AppTheme.border),
+            borderRadius: BorderRadius.circular(9),
+            color: value ? AppTheme.success.withOpacity(0.15) : AppTheme.border,
+            border: Border.all(
+              color: value ? AppTheme.success.withOpacity(0.3) : AppTheme.borderStrong,
+              width: 0.5,
+            ),
           ),
-          child: Text(
-            shortcutText,
-            style: const TextStyle(
-              color: AppTheme.accent,
-              fontSize: 12,
-              fontWeight: FontWeight.bold,
-              fontFamily: 'monospace',
+          child: AnimatedAlign(
+            duration: AppConstants.animQuick,
+            curve: Curves.easeOut,
+            alignment: value ? Alignment.centerRight : Alignment.centerLeft,
+            child: Container(
+              width: 12,
+              height: 12,
+              decoration: BoxDecoration(
+                shape: BoxShape.circle,
+                color: value ? AppTheme.success : AppTheme.textMuted,
+              ),
             ),
           ),
         ),
-        subtitle: const Text(
-          'Global shortcut to show or hide ClipQ from anywhere.',
-          style: TextStyle(color: AppTheme.textMuted, fontSize: 12),
+      ),
+    );
+  }
+}
+
+// ── Keyboard Pill ────────────────────────────────────────────────────────────
+
+class _KbdPill extends StatelessWidget {
+  const _KbdPill({required this.label});
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+      decoration: BoxDecoration(
+        color: AppTheme.surfaceCard,
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: AppTheme.border, width: 0.5),
+      ),
+      child: Text(
+        label,
+        style: AppTheme.uiLabel.copyWith(
+          fontSize: 9,
+          fontWeight: FontWeight.w600,
+          color: AppTheme.textSecondary,
         ),
       ),
     );

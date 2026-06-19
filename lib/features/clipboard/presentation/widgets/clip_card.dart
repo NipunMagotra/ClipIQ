@@ -1,22 +1,24 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
-import 'package:timeago/timeago.dart' as timeago;
 
 import '../../../../core/services/clipboard_service.dart';
 import '../../../../core/theme/app_theme.dart';
+import '../../../../core/widgets/clip_icons.dart';
 import '../../application/clipboard_sync_service.dart';
 import '../../data/models/clipboard_item.dart';
 import '../notifiers/clipboard_history_notifier.dart';
 
-/// Flat card for a single clipboard history item.
+/// Raycast-style compact list row for ClipQ v2.
 ///
 /// Features:
-///  - Left teal border accent bar
-///  - Content type label (TEXT / HTML)
-///  - Relative timestamp
-///  - Tap to copy with ✓ feedback
-///  - Swipe-left to delete with confirmation
+///   • Height: 40px. No card decoration, transparent background by default.
+///   • 1px hairline separator between rows.
+///   • Inline custom thin-stroke content type icon (no circular background).
+///   • Single-line truncated content preview.
+///   • Right-aligned short timestamp (e.g., "2m").
+///   • Actions only visible on hover with zero background decoration.
+///   • Active/selected state: left 2px accent bar + very faint white tint.
 class ClipCard extends ConsumerStatefulWidget {
   const ClipCard({
     super.key,
@@ -33,10 +35,11 @@ class ClipCard extends ConsumerStatefulWidget {
 
 class _ClipCardState extends ConsumerState<ClipCard> {
   bool _copied = false;
+  bool _hovered = false;
 
   Future<void> _copyToClipboard() async {
     final clipService = ref.read(clipboardServiceProvider);
-    
+
     ClipboardPayload payload;
     if (widget.item.contentType == 'image') {
       final repo = ref.read(clipboardRepositoryProvider);
@@ -65,19 +68,52 @@ class _ClipCardState extends ConsumerState<ClipCard> {
       await clipService.writeClipboard(payload);
       if (!mounted) return;
       setState(() => _copied = true);
-      Future.delayed(const Duration(seconds: 2), () {
+      Future.delayed(const Duration(milliseconds: 600), () {
         if (mounted) setState(() => _copied = false);
       });
     } catch (e) {
       if (!mounted) return;
       ScaffoldMessenger.of(context).showSnackBar(
-        SnackBar(content: Text('Failed to copy to clipboard: $e')),
+        SnackBar(content: Text('Failed to copy: $e')),
       );
     }
   }
 
   @override
   Widget build(BuildContext context) {
+    final isImage = widget.item.contentType == 'image';
+    final text = widget.item.preview.replaceAll('\n', ' ');
+    final isUrl = _looksLikeUrl(text);
+    final isCode = _looksLikeCode(text);
+
+    final icon = isImage
+        ? const ClipImageIcon(size: 16)
+        : isUrl
+            ? const ClipLinkIcon(size: 16)
+            : isCode
+                ? const ClipCodeIcon(size: 16)
+                : const ClipTextIcon(size: 16);
+
+    final rowBackground = _copied
+        ? AppTheme.accent.withOpacity(0.06)
+        : _hovered
+            ? Colors.white.withOpacity(0.03)
+            : Colors.transparent;
+
+    final decoration = BoxDecoration(
+      color: rowBackground,
+      border: Border(
+        left: BorderSide(
+          color: _hovered ? AppTheme.accent : Colors.transparent,
+          width: 2,
+        ),
+        bottom: const BorderSide(
+          color: AppTheme.divider,
+          width: 0.5,
+        ),
+      ),
+    );
+
     return Dismissible(
       key: ValueKey(widget.item.id),
       direction: DismissDirection.endToStart,
@@ -86,168 +122,141 @@ class _ClipCardState extends ConsumerState<ClipCard> {
       onDismissed: (_) {
         ref.read(clipboardHistoryProvider.notifier).deleteItem(widget.item.id);
       },
-      child: _buildCard(),
-    );
-  }
-
-  Widget _buildCard() {
-    final isImage = widget.item.contentType == 'image';
-    return Container(
-      margin: const EdgeInsets.only(bottom: 1),
-      decoration: AppTheme.accentCard(),
-      child: InkWell(
-        onTap: _copyToClipboard,
-        child: Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
-          child: Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Expanded(child: _buildContent()),
-              if (isImage && widget.item.storagePath != null) ...[
+      child: MouseRegion(
+        onEnter: (_) => setState(() => _hovered = true),
+        onExit: (_) => setState(() => _hovered = false),
+        cursor: SystemMouseCursors.click,
+        child: GestureDetector(
+          onTap: _copyToClipboard,
+          behavior: HitTestBehavior.opaque,
+          child: Container(
+            height: 40,
+            decoration: decoration,
+            padding: const EdgeInsets.symmetric(horizontal: 16),
+            child: Row(
+              children: [
+                // Content Type Icon
+                icon,
                 const SizedBox(width: 12),
-                _buildImagePreview(),
+
+                // Clipboard Content Preview
+                Expanded(
+                  child: Text(
+                    isImage ? 'Image' : text,
+                    style: isImage
+                        ? AppTheme.uiBody.copyWith(color: AppTheme.textPrimary)
+                        : isUrl
+                            ? AppTheme.contentUrl
+                            : isCode
+                                ? AppTheme.contentMono.copyWith(fontSize: 12)
+                                : AppTheme.uiBody.copyWith(color: AppTheme.textPrimary),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+
+                if (isImage && widget.item.storagePath != null) ...[
+                  const SizedBox(width: 8),
+                  _buildImageThumbnail(),
+                ],
+
+                const SizedBox(width: 12),
+
+                // Right-aligned area (timestamp or actions)
+                Container(
+                  width: 56,
+                  alignment: Alignment.centerRight,
+                  child: _hovered
+                      ? Row(
+                          mainAxisAlignment: MainAxisAlignment.end,
+                          children: [
+                            _ActionButton(
+                              icon: _copied
+                                  ? const Icon(Icons.check_rounded,
+                                      color: AppTheme.success, size: 14)
+                                  : const ClipCopyIcon(size: 14),
+                              tooltip: _copied ? 'Copied!' : 'Copy',
+                              onTap: _copyToClipboard,
+                            ),
+                            const SizedBox(width: 4),
+                            _ActionButton(
+                              icon: const ClipDeleteIcon(size: 14),
+                              tooltip: 'Delete',
+                              onTap: () async {
+                                final confirmed = await _confirmDelete(context);
+                                if (confirmed && mounted) {
+                                  ref
+                                      .read(clipboardHistoryProvider.notifier)
+                                      .deleteItem(widget.item.id);
+                                }
+                              },
+                            ),
+                          ],
+                        )
+                      : Text(
+                          _formatTime(widget.item.copiedAt),
+                          style: AppTheme.uiLabel.copyWith(
+                            color: AppTheme.textMuted,
+                            fontSize: 11,
+                          ),
+                          maxLines: 1,
+                        ),
+                ),
               ],
-              const SizedBox(width: 12),
-              _buildCopyButton(),
-            ],
+            ),
           ),
         ),
       ),
     );
   }
 
-  Widget _buildImagePreview() {
+  Widget _buildImageThumbnail() {
     final imageUrl = Supabase.instance.client.storage
         .from('clipboards')
         .getPublicUrl(widget.item.storagePath!);
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(4),
+      borderRadius: BorderRadius.circular(AppTheme.radiusSm),
       child: Image.network(
         imageUrl,
-        width: 60,
-        height: 60,
+        width: 24,
+        height: 24,
         fit: BoxFit.cover,
-        errorBuilder: (context, error, stackTrace) {
+        errorBuilder: (_, __, ___) =>
+            const ClipImageIcon(size: 14, color: AppTheme.textMuted),
+        loadingBuilder: (_, child, progress) {
+          if (progress == null) return child;
           return Container(
-            width: 60,
-            height: 60,
-            color: AppTheme.surfaceElevated,
-            child: const Icon(Icons.broken_image_outlined,
-                color: AppTheme.textMuted, size: 20),
-          );
-        },
-        loadingBuilder: (context, child, loadingProgress) {
-          if (loadingProgress == null) return child;
-          return Container(
-            width: 60,
-            height: 60,
+            width: 24,
+            height: 24,
             color: AppTheme.surfaceElevated,
             child: const Center(
               child: SizedBox(
-                width: 14,
-                height: 14,
+                width: 10,
+                height: 10,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2, color: AppTheme.primary),
+                  strokeWidth: 1.5,
+                  color: AppTheme.accent,
+                ),
               ),
             ),
           );
         },
       ),
-    );
-  }
-
-  Widget _buildContent() {
-    final preview = widget.item.preview;
-    final isImage = widget.item.contentType == 'image';
-    return Column(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        // Type label + timestamp
-        Row(
-          children: [
-            _TypeLabel(type: widget.item.contentType),
-            const Spacer(),
-            Text(
-              timeago.format(widget.item.copiedAt),
-              style: const TextStyle(
-                color: AppTheme.textMuted,
-                fontSize: 11,
-              ),
-            ),
-          ],
-        ),
-        const SizedBox(height: 8),
-        // Preview content
-        if (isImage)
-          const Row(
-            children: [
-              Icon(Icons.image_outlined, color: AppTheme.primaryLight, size: 16),
-              SizedBox(width: 6),
-              Text(
-                'Image Clipboard Item',
-                style: TextStyle(
-                  color: AppTheme.textPrimary,
-                  fontSize: 13,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ],
-          )
-        else
-          Text(
-            preview.isEmpty ? '(empty)' : preview,
-            maxLines: 3,
-            overflow: TextOverflow.ellipsis,
-            style: TextStyle(
-              color: preview.isEmpty ? AppTheme.textMuted : AppTheme.textPrimary,
-              fontSize: 13,
-              height: 1.5,
-            ),
-          ),
-      ],
-    );
-  }
-
-  Widget _buildCopyButton() {
-    if (_copied) {
-      return Container(
-        width: 32,
-        height: 32,
-        color: AppTheme.success.withAlpha(20),
-        child: const Icon(Icons.check, color: AppTheme.success, size: 16),
-      );
-    }
-    return Container(
-      width: 32,
-      height: 32,
-      decoration: BoxDecoration(
-        color: AppTheme.surfaceElevated,
-        border: Border.all(color: AppTheme.border),
-      ),
-      child: const Icon(Icons.copy, color: AppTheme.textSecondary, size: 15),
     );
   }
 
   Widget _buildDismissBackground() {
     return Container(
-      margin: const EdgeInsets.only(bottom: 1),
-      color: AppTheme.error.withAlpha(25),
+      decoration: const BoxDecoration(
+        color: AppTheme.error,
+      ),
       alignment: Alignment.centerRight,
-      padding: const EdgeInsets.symmetric(horizontal: 20),
-      child: Row(
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      child: const Row(
         mainAxisAlignment: MainAxisAlignment.end,
-        children: const [
-          Icon(Icons.delete_outline, color: AppTheme.error, size: 20),
-          SizedBox(width: 6),
-          Text(
-            'Delete',
-            style: TextStyle(
-              color: AppTheme.error,
-              fontSize: 13,
-              fontWeight: FontWeight.w500,
-            ),
-          ),
+        children: [
+          ClipDeleteIcon(size: 14, color: Colors.white),
         ],
       ),
     );
@@ -257,15 +266,10 @@ class _ClipCardState extends ConsumerState<ClipCard> {
     final confirmed = await showDialog<bool>(
       context: context,
       builder: (ctx) => AlertDialog(
-        backgroundColor: AppTheme.surfaceCard,
-        shape: const RoundedRectangleBorder(),
-        title: const Text(
-          'Delete this clip?',
-          style: TextStyle(color: AppTheme.textPrimary, fontSize: 16),
-        ),
-        content: const Text(
+        title: Text('Delete this clip?', style: AppTheme.uiStrong),
+        content: Text(
           'This item will be permanently removed from your history on all devices.',
-          style: TextStyle(color: AppTheme.textSecondary, fontSize: 13),
+          style: AppTheme.uiBody.copyWith(color: AppTheme.textSecondary),
         ),
         actions: [
           TextButton(
@@ -274,45 +278,92 @@ class _ClipCardState extends ConsumerState<ClipCard> {
           ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: const Text(
-              'Delete',
-              style: TextStyle(color: AppTheme.error),
-            ),
+            child: Text('Delete', style: TextStyle(color: AppTheme.error)),
           ),
         ],
       ),
     );
     return confirmed ?? false;
   }
+
+  String _formatTime(DateTime dt) {
+    final diff = DateTime.now().difference(dt);
+    if (diff.isNegative) return 'now';
+    if (diff.inMinutes < 1) return 'now';
+    if (diff.inHours < 1) return '${diff.inMinutes}m';
+    if (diff.inDays < 1) return '${diff.inHours}h';
+    return '${diff.inDays}d';
+  }
+
+  bool _looksLikeCode(String text) {
+    final codeIndicators = [
+      '{',
+      '}',
+      '=>',
+      'function',
+      'class ',
+      'import ',
+      'const ',
+      'var ',
+      'let ',
+      'def ',
+      'return ',
+      ';',
+      '()',
+      '[]'
+    ];
+    final lower = text.toLowerCase();
+    return codeIndicators.any((ind) => lower.contains(ind));
+  }
+
+  bool _looksLikeUrl(String text) {
+    final t = text.trim();
+    return t.startsWith('http://') ||
+        t.startsWith('https://') ||
+        t.startsWith('www.') ||
+        RegExp(r'^[\w.-]+\.\w{2,}(/|$)').hasMatch(t);
+  }
 }
 
-// ── Type Label ──────────────────────────────────────────────────────────────────
+class _ActionButton extends StatefulWidget {
+  const _ActionButton({
+    required this.icon,
+    required this.tooltip,
+    required this.onTap,
+  });
 
-class _TypeLabel extends StatelessWidget {
-  const _TypeLabel({required this.type});
-  final String type;
+  final Widget icon;
+  final String tooltip;
+  final VoidCallback onTap;
+
+  @override
+  State<_ActionButton> createState() => _ActionButtonState();
+}
+
+class _ActionButtonState extends State<_ActionButton> {
+  bool _hovered = false;
 
   @override
   Widget build(BuildContext context) {
-    final (label, color) = switch (type) {
-      'html'  => ('HTML', AppTheme.warning),
-      'image' => ('IMG',  AppTheme.primaryLight),
-      _       => ('TEXT', AppTheme.accent),
-    };
-
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-      decoration: BoxDecoration(
-        border: Border.all(color: color.withAlpha(120)),
-        color: color.withAlpha(20),
-      ),
-      child: Text(
-        label,
-        style: TextStyle(
-          color: color,
-          fontSize: 10,
-          fontWeight: FontWeight.w700,
-          letterSpacing: 0.8,
+    return MouseRegion(
+      onEnter: (_) => setState(() => _hovered = true),
+      onExit: (_) => setState(() => _hovered = false),
+      cursor: SystemMouseCursors.click,
+      child: Tooltip(
+        message: widget.tooltip,
+        child: GestureDetector(
+          onTap: widget.onTap,
+          behavior: HitTestBehavior.opaque,
+          child: SizedBox(
+            width: 24,
+            height: 24,
+            child: Center(
+              child: Opacity(
+                opacity: _hovered ? 1.0 : 0.6,
+                child: widget.icon,
+              ),
+            ),
+          ),
         ),
       ),
     );

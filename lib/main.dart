@@ -34,8 +34,8 @@ Future<void> main() async {
     await windowManager.ensureInitialized();
     await windowManager.waitUntilReadyToShow(
       const WindowOptions(
-        size: Size(420, 700),
-        minimumSize: Size(360, 500),
+        size: Size(460, 740),
+        minimumSize: Size(380, 560),
         center: true,
         title: 'ClipQ',
         backgroundColor: Colors.transparent,

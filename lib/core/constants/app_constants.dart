@@ -1,3 +1,5 @@
+import 'package:flutter/animation.dart';
+
 /// App-wide constants for ClipQ.
 class AppConstants {
   AppConstants._();
@@ -24,9 +26,10 @@ class AppConstants {
   static const Duration uploadDebounce = Duration(milliseconds: 600);
 
   // ── Animation ─────────────────────────────────────────────────────────────
-  static const Duration animFast   = Duration(milliseconds: 150);
-  static const Duration animNormal = Duration(milliseconds: 300);
-  static const Duration animSlow   = Duration(milliseconds: 500);
+  static const Duration animQuick  = Duration(milliseconds: 150);
+  static const Duration animNormal = Duration(milliseconds: 200);
+  static const Duration animSmooth = Duration(milliseconds: 300);
+  static const Curve animCurve     = Curves.easeOutCubic;
 
   // ── SharedPreferences keys ────────────────────────────────────────────────
   static const String prefDeviceId   = 'device_id';
